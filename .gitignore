@@ -5,3 +5,7 @@ dist/
 .env.*
 !.env.example
 .DS_Store
+*-firebase-adminsdk-*.json
+serviceAccount*.json
+.learn.json
+learn.json

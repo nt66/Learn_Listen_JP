@@ -139,6 +139,6 @@ function geminiApi(): Plugin {
 
 export default defineConfig({
   plugins: [react(), geminiApi()],
-  server: { port: 5173 },
+  server: { port: 5173, proxy: { '/api/books': 'http://127.0.0.1:8787' } },
   preview: { port: 4173 },
 });

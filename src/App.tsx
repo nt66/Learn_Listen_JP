@@ -106,14 +106,18 @@ function App() {
       speechSynthesis.speak(utterance);
     };
 
-    if (settingsRef.current.ttsEngine !== 'gemini' || !gemini) return speakWithSystem();
+    const engine = settingsRef.current.ttsEngine;
+    const cloud = engine === 'cloud' && mode === 'ja' && item.bookId && item.order;
+    if (!cloud && (engine !== 'gemini' || !gemini)) return speakWithSystem();
     const controller = new AbortController();
     audioAbortRef.current = controller;
     try {
-      const response = await fetch('/api/tts', {
-        method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, lang: mode }),
-      });
+      const response = cloud
+        ? await fetch(`/api/books/${encodeURIComponent(item.bookId!)}/audio/${item.order}`, { signal: controller.signal })
+        : await fetch('/api/tts', {
+          method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, lang: mode }),
+        });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
         throw new Error(payload.error || '自然语音生成失败');
@@ -186,12 +190,13 @@ function App() {
     setSettings(previous => ({ ...previous, [key]: value }));
   };
 
-  const importCsv = async (file: File, autoEnrich: boolean, replace: boolean) => {
+  const importCsv = async (file: File, autoEnrich: boolean, replace: boolean, bookId: string) => {
     setImporting(true);
     try {
       const parsed = parseVocabularyCsv(await file.text());
       if (!parsed.length) throw new Error('CSV 中没有找到可导入的单词');
       let finalWords = parsed;
+      const tag = (list: Vocabulary[]) => list.map((word, i) => ({ ...word, bookId, order: i + 1 }));
       const incomplete = parsed.some(word => !word.kana || !word.romaji || !word.chinese);
       if (autoEnrich && incomplete) {
         if (!gemini) throw new Error('Gemini 尚未配置；请导入包含 kana、romaji、chinese 列的 CSV');
@@ -206,10 +211,22 @@ function App() {
           return { ...word, ...enriched, id: word.id, japanese: word.japanese, kana, romaji: enriched.romaji || word.romaji || toRomaji(kana) };
         });
       }
+      finalWords = tag(finalWords);
       setWords(existing => replace ? finalWords : [...existing, ...finalWords]);
       setIndex(0);
       setShowImport(false);
-      setMessage(`已导入 ${finalWords.length} 个单词${autoEnrich && incomplete ? '，并由 Gemini 完成注音与翻译' : ''}`);
+      const enrichedNote = autoEnrich && incomplete ? '，并由 Gemini 完成注音与翻译' : '';
+      try {
+        const response = await fetch(`/api/books/${encodeURIComponent(bookId)}/words`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: bookId, words: finalWords }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || `上传失败 (${response.status})`);
+        setMessage(`已导入 ${finalWords.length} 个单词${enrichedNote}，并上传到 Firebase「${bookId}」`);
+      } catch (error) {
+        setMessage(`已导入到本地，但上传 Firebase 失败：${error instanceof Error ? error.message : '未知错误'}`);
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '导入失败');
     } finally { setImporting(false); }
@@ -241,7 +258,7 @@ function App() {
       <main className="study-layout">
         <section className="study-area">
           <div className="session-line">
-            <div><span className="overline">LISTENING SESSION</span><h1>声音与意义，直接连接。</h1></div>
+            <div className="tip"><span>学习提示</span><p>先听声音再看卡片。能在 2–4 秒内说出答案，才算真正完成一次提取。</p></div>
             <div className="counter"><strong>{empty ? 0 : index + 1}</strong><span>/ {words.length}</span></div>
           </div>
 
@@ -274,21 +291,12 @@ function App() {
               </button>
               <button className="step-button" onClick={() => move(1)} aria-label="下一个"><ChevronRight size={26}/></button>
             </div>
-            <button className="rate-button" onClick={() => setShowSettings(true)}><strong>{settings.rate.toFixed(1)}×</strong><span>{settings.interval}s 间隔</span></button>
+            <div className="player-right">
+              <button className="lang-toggle" onClick={() => updateSettings('mode', settings.mode === 'ja' ? 'zh' : 'ja')} aria-label="切换播报语言"><Languages size={15}/>{settings.mode === 'ja' ? '日' : '中'}</button>
+            </div>
           </div>
         </section>
 
-        <aside className="side-panel">
-          <div className="mode-visual"><div className="pulse"><Volume2 size={24}/></div><span>当前播报 · {settings.ttsEngine === 'gemini' ? 'AI 自然语音' : '系统语音'}</span><strong>{settings.mode === 'ja' ? '日本語' : '中文'}</strong><small>{settings.mode === 'ja' ? '训练声音 → 意义通路' : '训练提示 → 日语提取'}</small></div>
-          <div className="quick-settings">
-            <h3>快速设置</h3>
-            <button onClick={() => updateSettings('mode', settings.mode === 'ja' ? 'zh' : 'ja')}><Languages size={18}/><span>播报语言</span><b>{settings.mode === 'ja' ? '日文' : '中文'}</b></button>
-            <button onClick={() => setShowSettings(true)}><Sparkles size={18}/><span>语音引擎</span><b className={settings.ttsEngine === 'gemini' ? 'on' : ''}>{settings.ttsEngine === 'gemini' ? '自然' : '系统'}</b></button>
-            <button onClick={() => setShowSettings(true)}><Gauge size={18}/><span>播放速度</span><b>{settings.rate}×</b></button>
-            <button onClick={() => updateSettings('shuffle', !settings.shuffle)}><Shuffle size={18}/><span>随机顺序</span><b className={settings.shuffle ? 'on' : ''}>{settings.shuffle ? '开启' : '关闭'}</b></button>
-          </div>
-          <div className="tip"><span>学习提示</span><p>先听声音再看卡片。能在 2–4 秒内说出答案，才算真正完成一次提取。</p></div>
-        </aside>
       </main>
 
       {showSettings && <SettingsModal settings={settings} gemini={gemini} ttsModel={ttsModel} onChange={updateSettings} onClose={() => setShowSettings(false)} />}
@@ -305,7 +313,7 @@ function ModalFrame({ title, subtitle, children, onClose, wide = false }: { titl
 
 function SettingsModal({ settings, gemini, ttsModel, onChange, onClose }: { settings: Settings; gemini: boolean; ttsModel: string; onChange: <K extends keyof Settings>(key: K, value: Settings[K]) => void; onClose: () => void }) {
   return <ModalFrame title="播放设置" subtitle="每次更改会停止当前播放，避免队列错位。" onClose={onClose}>
-    <div className="setting-group"><label>语音引擎</label><div className="segmented"><button className={settings.ttsEngine === 'system' ? 'active' : ''} onClick={() => onChange('ttsEngine','system')}>系统语音<small>免费、即时、可离线</small></button><button disabled={!gemini} className={settings.ttsEngine === 'gemini' ? 'active natural-option' : 'natural-option'} onClick={() => onChange('ttsEngine','gemini')}>AI 自然语音<small>{gemini ? ttsModel : '需要配置 Gemini API'}</small></button></div></div>
+    <div className="setting-group"><label>语音引擎</label><div className="segmented three"><button className={settings.ttsEngine === 'system' ? 'active' : ''} onClick={() => onChange('ttsEngine','system')}>系统语音<small>免费、即时、可离线</small></button><button disabled={!gemini} className={settings.ttsEngine === 'gemini' ? 'active natural-option' : 'natural-option'} onClick={() => onChange('ttsEngine','gemini')}>AI 自然语音<small>{gemini ? ttsModel : '需要配置 Gemini API'}</small></button><button className={settings.ttsEngine === 'cloud' ? 'active' : ''} onClick={() => onChange('ttsEngine','cloud')}>Google 日语<small>预生成，仅日文播报</small></button></div></div>
     <div className="setting-group"><label>播报模式</label><div className="segmented"><button className={settings.mode === 'ja' ? 'active' : ''} onClick={() => onChange('mode','ja')}>日文播报<small>听音辨义</small></button><button className={settings.mode === 'zh' ? 'active' : ''} onClick={() => onChange('mode','zh')}>中文播报<small>主动说日文</small></button></div></div>
     <div className="setting-group"><label>单词间隔</label><div className="choice-row">{intervals.map(value => <button className={settings.interval === value ? 'active' : ''} onClick={() => onChange('interval', value)} key={value}>{value} 秒</button>)}</div></div>
     <div className="setting-group"><label>语速</label><div className="choice-row five">{rates.map(value => <button className={settings.rate === value ? 'active' : ''} onClick={() => onChange('rate', value)} key={value}>{value}×</button>)}</div></div>
@@ -313,20 +321,23 @@ function SettingsModal({ settings, gemini, ttsModel, onChange, onClose }: { sett
   </ModalFrame>;
 }
 
-function ImportModal({ gemini, model, importing, onImport, onTemplate, onClose }: { gemini: boolean; model: string; importing: boolean; onImport: (file: File, enrich: boolean, replace: boolean) => void; onTemplate: () => void; onClose: () => void }) {
+function ImportModal({ gemini, model, importing, onImport, onTemplate, onClose }: { gemini: boolean; model: string; importing: boolean; onImport: (file: File, enrich: boolean, replace: boolean, bookId: string) => void; onTemplate: () => void; onClose: () => void }) {
   const [file, setFile] = useState<File | null>(null);
   const [enrich, setEnrich] = useState(gemini);
   const [replace, setReplace] = useState(false);
+  const [bookId, setBookId] = useState('');
+  const effectiveBookId = bookId.trim() || (file ? file.name.replace(/\.[^.]+$/, '') : '');
   const inputRef = useRef<HTMLInputElement>(null);
   return <ModalFrame title="导入 CSV 词库" subtitle="最少只需 japanese 一列；配置 Gemini 后可自动补全其余字段。" onClose={onClose}>
     <input ref={inputRef} hidden type="file" accept=".csv,text/csv" onChange={event => setFile(event.target.files?.[0] || null)}/>
     <button className={`dropzone ${file ? 'has-file' : ''}`} onClick={() => inputRef.current?.click()} onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); setFile(event.dataTransfer.files[0] || null); }}>
       {file ? <><Check size={30}/><strong>{file.name}</strong><span>{(file.size / 1024).toFixed(1)} KB · 点击重新选择</span></> : <><UploadCloud size={34}/><strong>拖入 CSV，或点击选择</strong><span>支持 UTF-8 与带 BOM 的 CSV</span></>}
     </button>
+    <div className="setting-group"><label>Firebase 词库名（Books 下的文档 ID）</label><input className="text-input" value={bookId} placeholder={file ? file.name.replace(/\.[^.]+$/, '') : '默认使用 CSV 文件名'} onChange={event => setBookId(event.target.value)}/></div>
     <div className="csv-columns"><code>japanese</code><code>kana</code><code>romaji</code><code>chinese</code></div>
     <label className={`check-row ${!gemini ? 'disabled' : ''}`}><input type="checkbox" checked={enrich} disabled={!gemini} onChange={event => setEnrich(event.target.checked)}/><span><b><Sparkles size={16}/> Gemini 自动补全</b><small>{gemini ? `已连接 ${model}` : '未配置 GEMINI_API_KEY，将保留空白字段'}</small></span></label>
     <label className="check-row"><input type="checkbox" checked={replace} onChange={event => setReplace(event.target.checked)}/><span><b><RotateCcw size={16}/>替换当前词库</b><small>关闭时会追加到现有词库末尾</small></span></label>
-    <div className="modal-actions"><button className="secondary-button" onClick={onTemplate}><Download size={17}/>下载模板</button><button className="primary-button" disabled={!file || importing} onClick={() => file && onImport(file, enrich, replace)}>{importing ? '正在处理…' : '开始导入'}</button></div>
+    <div className="modal-actions"><button className="secondary-button" onClick={onTemplate}><Download size={17}/>下载模板</button><button className="primary-button" disabled={!file || !effectiveBookId || importing} onClick={() => file && onImport(file, enrich, replace, effectiveBookId)}>{importing ? '正在处理…' : '导入并上传'}</button></div>
   </ModalFrame>;
 }
 

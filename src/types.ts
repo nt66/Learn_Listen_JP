@@ -4,10 +4,12 @@ export type Vocabulary = {
   kana: string;
   romaji: string;
   chinese: string;
+  bookId?: string;
+  order?: number;
 };
 
 export type SpeechMode = 'ja' | 'zh';
-export type TtsEngine = 'system' | 'gemini';
+export type TtsEngine = 'system' | 'gemini' | 'cloud';
 
 export type Settings = {
   interval: 1 | 3 | 5;
