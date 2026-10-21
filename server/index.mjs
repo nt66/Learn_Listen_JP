@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { initializeApp, cert, applicationDefault } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+import { geminiMiddleware } from './gemini.mjs';
 
 const PORT = Number(process.env.PORT || 8787);
 const credentialPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
@@ -12,6 +13,7 @@ initializeApp({
   credential: credentialPath ? cert(JSON.parse(readFileSync(credentialPath, 'utf8'))) : applicationDefault(),
 });
 const db = getFirestore();
+const gemini = geminiMiddleware(process.env);
 
 const MAX_WORDS = 2000;
 const BATCH_SIZE = 400;
@@ -90,7 +92,7 @@ createServer(async (req, res) => {
       return send(res, 200, { bookId, count: words.length });
     }
 
-    return send(res, 404, { error: 'Not found' });
+    return gemini(req, res, () => send(res, 404, { error: 'Not found' }));
   } catch (error) {
     console.error(error);
     return send(res, error.status || 500, { error: error instanceof Error ? error.message : '服务器错误' });
