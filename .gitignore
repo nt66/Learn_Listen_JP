@@ -7,5 +7,6 @@ dist/
 .DS_Store
 *-firebase-adminsdk-*.json
 serviceAccount*.json
+secrets/
 .learn.json
 learn.json

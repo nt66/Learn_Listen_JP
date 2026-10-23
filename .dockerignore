@@ -1,0 +1,15 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+node_modules
+dist
+secrets
+*.tsbuildinfo
+.DS_Store
+npm-debug.log*
+learn.json
+.learn.json
+*-firebase-adminsdk-*.json
+serviceAccount*.json

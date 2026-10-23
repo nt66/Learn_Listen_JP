@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  BookOpen, Check, ChevronLeft, ChevronRight, Download, Eye, FileUp, Gauge, Languages,
-  ListMusic, Pause, Play, Plus, RotateCcw, Settings as SettingsIcon, Shuffle, Sparkles,
-  Trash2, UploadCloud, Volume2, X,
+  BookOpen, Check, CheckCircle2, ChevronLeft, ChevronRight, Eye, Languages, Library, ListMusic, Loader2,
+  Pause, Play, Settings as SettingsIcon, Shuffle, Sparkles, Volume2, X,
 } from 'lucide-react';
-import { parseVocabularyCsv } from './lib/csv';
-import { toHiragana, toRomaji } from './lib/japanese';
-import type { Settings, Vocabulary } from './types';
+import type { Book, Settings, Vocabulary } from './types';
+
+const LOADED_TOAST_MS = 3000;
+// iOS 只允许在用户手势里首次 play()，之后复用同一个 audio 元素才能自动连播
+const SILENT_WAV = 'data:audio/wav;base64,UklGRnQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YVAAAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgA==';
 
 const starterWords: Vocabulary[] = [
   { id:'1', japanese:'先生', kana:'せんせい', romaji:'sensei', chinese:'老师；先生' },
@@ -17,7 +18,7 @@ const starterWords: Vocabulary[] = [
   { id:'6', japanese:'見積もり', kana:'みつもり', romaji:'mitsumori', chinese:'估价；报价' },
 ];
 
-const defaultSettings: Settings = { interval: 3, rate: 1, mode: 'ja', shuffle: false, ttsEngine: 'system' };
+const defaultSettings: Settings = { interval: 3, rate: 1, mode: 'ja', shuffle: false, ttsEngine: 'cloud' };
 const rates: Settings['rate'][] = [0.5, 1, 1.5, 2, 3];
 const intervals: Settings['interval'][] = [1, 3, 5];
 
@@ -26,8 +27,14 @@ function loadWords() {
   catch { return starterWords; }
 }
 
+// 中文播报只能用系统语音；偏好保留，切回日文播报后自动恢复。
+const effectiveEngine = (settings: Settings): Settings['ttsEngine'] => settings.mode === 'zh' ? 'system' : settings.ttsEngine;
+
 function loadSettings() {
-  try { return { ...defaultSettings, ...JSON.parse(localStorage.getItem('kotoba-settings') || '') } as Settings; }
+  try {
+    const saved = { ...defaultSettings, ...JSON.parse(localStorage.getItem('kotoba-settings') || '') } as Settings;
+    return (saved.ttsEngine as string) === 'gemini' ? { ...saved, ttsEngine: 'cloud' as const } : saved;
+  }
   catch { return defaultSettings; }
 }
 
@@ -44,19 +51,17 @@ function App() {
   const [index, setIndex] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [showImport, setShowImport] = useState(false);
-  const [showLibrary, setShowLibrary] = useState(false);
+  const [showBooks, setShowBooks] = useState(false);
+  const [currentBook, setCurrentBook] = useState(() => localStorage.getItem('kotoba-book') || '');
   const [message, setMessage] = useState('');
-  const [gemini, setGemini] = useState(false);
-  const [model, setModel] = useState('');
-  const [ttsModel, setTtsModel] = useState('');
-  const [importing, setImporting] = useState(false);
+  const [loaded, setLoaded] = useState(0);
   const timerRef = useRef<number | null>(null);
   const playingRef = useRef(false);
   const indexRef = useRef(0);
   const settingsRef = useRef(settings);
   const wordsRef = useRef(words);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioUnlockedRef = useRef(false);
   const audioUrlRef = useRef('');
   const audioAbortRef = useRef<AbortController | null>(null);
   const playTokenRef = useRef(0);
@@ -68,15 +73,34 @@ function App() {
   useEffect(() => { localStorage.setItem('kotoba-settings', JSON.stringify(settings)); settingsRef.current = settings; }, [settings]);
   useEffect(() => { indexRef.current = index; }, [index]);
   useEffect(() => {
-    fetch('/api/status').then(r => r.json()).then(data => {
-      setGemini(Boolean(data.gemini)); setModel(data.model || ''); setTtsModel(data.ttsModel || '');
-    }).catch(() => setGemini(false));
+    if (!loaded) return;
+    const t = window.setTimeout(() => setLoaded(0), LOADED_TOAST_MS);
+    return () => window.clearTimeout(t);
+  }, [loaded]);
+  useEffect(() => { localStorage.setItem('kotoba-book', currentBook); }, [currentBook]);
+  useEffect(() => {
     return () => {
       speechSynthesis.cancel(); audioAbortRef.current?.abort(); audioRef.current?.pause();
       if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
       if (timerRef.current) window.clearTimeout(timerRef.current);
     };
   }, []);
+
+  const getPlayer = useCallback(() => {
+    if (!audioRef.current) {
+      audioRef.current = new Audio();
+      audioRef.current.setAttribute('playsinline', '');
+    }
+    return audioRef.current;
+  }, []);
+
+  // 必须在点击事件里同步调用
+  const unlockAudio = useCallback(() => {
+    if (audioUnlockedRef.current) return;
+    const player = getPlayer();
+    player.src = SILENT_WAV;
+    player.play().then(() => { audioUnlockedRef.current = true; }).catch(() => {});
+  }, [getPlayer]);
 
   const stop = useCallback(() => {
     playTokenRef.current += 1;
@@ -85,7 +109,8 @@ function App() {
     speechSynthesis.cancel();
     audioAbortRef.current?.abort();
     audioAbortRef.current = null;
-    if (audioRef.current) { audioRef.current.pause(); audioRef.current.src = ''; audioRef.current = null; }
+    const player = audioRef.current;
+    if (player) { player.onended = null; player.onerror = null; player.pause(); player.removeAttribute('src'); player.load(); }
     if (audioUrlRef.current) { URL.revokeObjectURL(audioUrlRef.current); audioUrlRef.current = ''; }
     if (timerRef.current) window.clearTimeout(timerRef.current);
     timerRef.current = null;
@@ -106,43 +131,36 @@ function App() {
       speechSynthesis.speak(utterance);
     };
 
-    const engine = settingsRef.current.ttsEngine;
-    const cloud = engine === 'cloud' && mode === 'ja' && item.bookId && item.order;
-    if (!cloud && (engine !== 'gemini' || !gemini)) return speakWithSystem();
+    const cloud = effectiveEngine(settingsRef.current) === 'cloud' && mode === 'ja' && item.bookId && item.order;
+    if (!cloud) return speakWithSystem();
     const controller = new AbortController();
     audioAbortRef.current = controller;
     try {
-      const response = cloud
-        ? await fetch(`/api/books/${encodeURIComponent(item.bookId!)}/audio/${item.order}`, { signal: controller.signal })
-        : await fetch('/api/tts', {
-          method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text, lang: mode }),
-        });
+      const response = await fetch(`/api/books/${encodeURIComponent(item.bookId!)}/audio/${item.order}`, { signal: controller.signal });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
-        throw new Error(payload.error || '自然语音生成失败');
+        throw new Error(payload.error || '语音加载失败');
       }
       const blob = await response.blob();
       if (token !== playTokenRef.current || (requirePlaying && !playingRef.current)) return;
       if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
       const url = URL.createObjectURL(blob);
       audioUrlRef.current = url;
-      const audio = new Audio(url);
-      audioRef.current = audio;
+      const audio = getPlayer();
+      audio.src = url;
       audio.playbackRate = settingsRef.current.rate;
       audio.onended = () => {
         if (audioUrlRef.current === url) { URL.revokeObjectURL(url); audioUrlRef.current = ''; }
-        audioRef.current = null;
         if (token === playTokenRef.current) onEnd?.();
       };
       audio.onerror = () => { if (token === playTokenRef.current) stop(); };
       await audio.play();
     } catch (error) {
       if (controller.signal.aborted || token !== playTokenRef.current) return;
-      setMessage(`${error instanceof Error ? error.message : '自然语音不可用'}，已回退到系统语音`);
+      setMessage(`${error instanceof Error ? error.message : '语音不可用'}，已回退到系统语音`);
       speakWithSystem();
     }
-  }, [gemini, stop]);
+  }, [stop, getPlayer]);
 
   const speakAt = useCallback((at: number) => {
     const list = wordsRef.current;
@@ -167,6 +185,7 @@ function App() {
   const togglePlay = () => {
     if (playingRef.current) return stop();
     if (!words.length) return;
+    unlockAudio();
     playingRef.current = true;
     setPlaying(true);
     speakAt(indexRef.current);
@@ -176,6 +195,7 @@ function App() {
     stop();
     const item = wordsRef.current[indexRef.current];
     if (!item) return;
+    unlockAudio();
     void playItem(item, undefined, false, playTokenRef.current);
   };
 
@@ -190,57 +210,17 @@ function App() {
     setSettings(previous => ({ ...previous, [key]: value }));
   };
 
-  const importCsv = async (file: File, autoEnrich: boolean, replace: boolean, bookId: string) => {
-    setImporting(true);
-    try {
-      const parsed = parseVocabularyCsv(await file.text());
-      if (!parsed.length) throw new Error('CSV 中没有找到可导入的单词');
-      let finalWords = parsed;
-      const tag = (list: Vocabulary[]) => list.map((word, i) => ({ ...word, bookId, order: i + 1 }));
-      const incomplete = parsed.some(word => !word.kana || !word.romaji || !word.chinese);
-      if (autoEnrich && incomplete) {
-        if (!gemini) throw new Error('Gemini 尚未配置；请导入包含 kana、romaji、chinese 列的 CSV');
-        const response = await fetch('/api/enrich', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ words: parsed }),
-        });
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error || 'Gemini 补全失败');
-        finalWords = parsed.map((word, i) => {
-          const enriched = payload.words.find((entry: { index: number }) => entry.index === i) || {};
-          const kana = toHiragana(enriched.kana || word.kana);
-          return { ...word, ...enriched, id: word.id, japanese: word.japanese, kana, romaji: enriched.romaji || word.romaji || toRomaji(kana) };
-        });
-      }
-      finalWords = tag(finalWords);
-      setWords(existing => replace ? finalWords : [...existing, ...finalWords]);
-      setIndex(0);
-      setShowImport(false);
-      const enrichedNote = autoEnrich && incomplete ? '，并由 Gemini 完成注音与翻译' : '';
-      try {
-        const response = await fetch(`/api/books/${encodeURIComponent(bookId)}/words`, {
-          method: 'PUT', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title: bookId, words: finalWords }),
-        });
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(payload.error || `上传失败 (${response.status})`);
-        setMessage(`已导入 ${finalWords.length} 个单词${enrichedNote}，并上传到 Firebase「${bookId}」`);
-      } catch (error) {
-        setMessage(`已导入到本地，但上传 Firebase 失败：${error instanceof Error ? error.message : '未知错误'}`);
-      }
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '导入失败');
-    } finally { setImporting(false); }
-  };
-
-  const updateWord = (id: string, key: keyof Omit<Vocabulary, 'id'>, value: string) => {
-    setWords(list => list.map(word => word.id === id ? { ...word, [key]: value } : word));
-  };
-
-  const downloadTemplate = () => {
-    const content = '\uFEFFjapanese,kana,romaji,chinese\n先生,せんせい,sensei,老师\n給与,,,\n';
-    const url = URL.createObjectURL(new Blob([content], { type: 'text/csv;charset=utf-8' }));
-    const link = document.createElement('a'); link.href = url; link.download = 'kotoba-template.csv'; link.click();
-    URL.revokeObjectURL(url);
+  const loadBook = async (book: Book) => {
+    const response = await fetch(`/api/books/${encodeURIComponent(book.id)}/words`);
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `加载失败 (${response.status})`);
+    const list: Vocabulary[] = payload.words.map((word: Omit<Vocabulary, 'id'>) => ({ ...word, id: `${book.id}-${word.order}`, bookId: book.id }));
+    stop();
+    setWords(list);
+    setIndex(0);
+    setCurrentBook(book.id);
+    setShowBooks(false);
+    setLoaded(Date.now());
   };
 
   const empty = !words.length;
@@ -250,24 +230,18 @@ function App() {
       <header className="topbar">
         <div className="brand"><span className="brand-mark">こ</span><span>KOTOBA <b>FLOW</b></span></div>
         <div className="header-actions">
-          <button className="ghost-button" onClick={() => setShowLibrary(true)}><ListMusic size={18}/><span>词库</span><em>{words.length}</em></button>
-          <button className="primary-button compact" onClick={() => setShowImport(true)}><FileUp size={18}/><span>导入 CSV</span></button>
+          <button className="ghost-button" onClick={() => setShowBooks(true)}><ListMusic size={18}/><span className="book-name">{currentBook || '选择单词书'}</span></button>
         </div>
       </header>
 
       <main className="study-layout">
         <section className="study-area">
-          <div className="session-line">
-            <div className="tip"><span>学习提示</span><p>先听声音再看卡片。能在 2–4 秒内说出答案，才算真正完成一次提取。</p></div>
-            <div className="counter"><strong>{empty ? 0 : index + 1}</strong><span>/ {words.length}</span></div>
-          </div>
-
           <article className={`word-card ${empty ? 'empty-card' : ''}`}>
             {empty ? (
-              <div className="empty-state"><BookOpen size={42}/><h2>词库还是空的</h2><p>导入 CSV，开始建立你的听辨循环。</p><button className="primary-button" onClick={() => setShowImport(true)}><Plus size={18}/>导入单词</button></div>
+              <div className="empty-state"><BookOpen size={42}/><h2>词库还是空的</h2><p>选择一本单词书，开始建立你的听辨循环。</p><button className="primary-button" onClick={() => setShowBooks(true)}><Library size={18}/>选择单词书</button></div>
             ) : (
               <>
-                <div className="card-top"><span className="card-label"><Volume2 size={15}/> NOW PLAYING</span><button className="sound-button" onClick={previewCurrent} aria-label="仅播放当前单词"><Volume2 size={22}/></button></div>
+                <div className="card-top"><span className="card-label"><Volume2 size={15}/> NOW PLAYING</span><div className="card-top-right"><div className="counter"><strong>{index + 1}</strong><span>/ {words.length}</span></div><button className="sound-button" onClick={previewCurrent} aria-label="仅播放当前单词"><Volume2 size={22}/></button></div></div>
                 <div className="word-content">
                   <div className="japanese-word">{current.japanese}</div>
                   <div className="reading">［ {current.kana || '待补充假名'} ］</div>
@@ -299,21 +273,33 @@ function App() {
 
       </main>
 
-      {showSettings && <SettingsModal settings={settings} gemini={gemini} ttsModel={ttsModel} onChange={updateSettings} onClose={() => setShowSettings(false)} />}
-      {showImport && <ImportModal gemini={gemini} model={model} importing={importing} onImport={importCsv} onTemplate={downloadTemplate} onClose={() => setShowImport(false)} />}
-      {showLibrary && <LibraryModal words={words} onUpdate={updateWord} onDelete={id => { stop(); setWords(list => list.filter(word => word.id !== id)); setIndex(0); }} onReset={() => { stop(); setWords(starterWords); setIndex(0); }} onClose={() => setShowLibrary(false)} />}
+      {showSettings && <SettingsModal settings={settings} onChange={updateSettings} onClose={() => setShowSettings(false)} />}
+      {showBooks && <BookPickerModal current={currentBook} onPick={loadBook} onClose={() => setShowBooks(false)} />}
+      {!!loaded && <div className="loaded-toast" role="status" aria-label="加载成功" onClick={() => setLoaded(0)}><CheckCircle2 size={30} strokeWidth={2.2}/></div>}
       {message && <div className="toast" role="status"><Check size={17}/><span>{message}</span><button onClick={() => setMessage('')}><X size={15}/></button></div>}
     </div>
   );
 }
 
-function ModalFrame({ title, subtitle, children, onClose, wide = false }: { title: string; subtitle: string; children: React.ReactNode; onClose: () => void; wide?: boolean }) {
-  return <div className="modal-backdrop" onMouseDown={event => event.target === event.currentTarget && onClose()}><section className={`modal ${wide ? 'wide' : ''}`}><div className="modal-head"><div><h2>{title}</h2><p>{subtitle}</p></div><button onClick={onClose}><X size={22}/></button></div>{children}</section></div>;
+function ModalFrame({ title, subtitle, children, onClose, wide = false }: { title: string; subtitle?: string; children: React.ReactNode; onClose: () => void; wide?: boolean }) {
+  useEffect(() => {
+    // 弹窗打开时锁定背景滚动（iOS 需要 position: fixed）
+    const { scrollY } = window;
+    const { style } = document.body;
+    const previous = { position: style.position, top: style.top, width: style.width };
+    style.position = 'fixed'; style.top = `-${scrollY}px`; style.width = '100%';
+    return () => {
+      style.position = previous.position; style.top = previous.top; style.width = previous.width;
+      window.scrollTo(0, scrollY);
+    };
+  }, []);
+  return <div className="modal-backdrop" onMouseDown={event => event.target === event.currentTarget && onClose()}><section className={`modal ${wide ? 'wide' : ''}`}><div className="modal-head"><div><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div><button onClick={onClose}><X size={22}/></button></div>{children}</section></div>;
 }
 
-function SettingsModal({ settings, gemini, ttsModel, onChange, onClose }: { settings: Settings; gemini: boolean; ttsModel: string; onChange: <K extends keyof Settings>(key: K, value: Settings[K]) => void; onClose: () => void }) {
+function SettingsModal({ settings, onChange, onClose }: { settings: Settings; onChange: <K extends keyof Settings>(key: K, value: Settings[K]) => void; onClose: () => void }) {
+  const engine = effectiveEngine(settings);
   return <ModalFrame title="播放设置" subtitle="每次更改会停止当前播放，避免队列错位。" onClose={onClose}>
-    <div className="setting-group"><label>语音引擎</label><div className="segmented three"><button className={settings.ttsEngine === 'system' ? 'active' : ''} onClick={() => onChange('ttsEngine','system')}>系统语音<small>免费、即时、可离线</small></button><button disabled={!gemini} className={settings.ttsEngine === 'gemini' ? 'active natural-option' : 'natural-option'} onClick={() => onChange('ttsEngine','gemini')}>AI 自然语音<small>{gemini ? ttsModel : '需要配置 Gemini API'}</small></button><button className={settings.ttsEngine === 'cloud' ? 'active' : ''} onClick={() => onChange('ttsEngine','cloud')}>Google 日语<small>预生成，仅日文播报</small></button></div></div>
+    <div className="setting-group"><label>语音引擎</label><div className="segmented"><button className={engine === 'cloud' ? 'active' : ''} disabled={settings.mode === 'zh'} onClick={() => onChange('ttsEngine','cloud')}>Google 日语<small>{settings.mode === 'zh' ? '中文播报不可用' : '预生成，仅日文播报'}</small></button><button className={engine === 'system' ? 'active' : ''} onClick={() => onChange('ttsEngine','system')}>系统语音<small>免费、即时、可离线</small></button></div></div>
     <div className="setting-group"><label>播报模式</label><div className="segmented"><button className={settings.mode === 'ja' ? 'active' : ''} onClick={() => onChange('mode','ja')}>日文播报<small>听音辨义</small></button><button className={settings.mode === 'zh' ? 'active' : ''} onClick={() => onChange('mode','zh')}>中文播报<small>主动说日文</small></button></div></div>
     <div className="setting-group"><label>单词间隔</label><div className="choice-row">{intervals.map(value => <button className={settings.interval === value ? 'active' : ''} onClick={() => onChange('interval', value)} key={value}>{value} 秒</button>)}</div></div>
     <div className="setting-group"><label>语速</label><div className="choice-row five">{rates.map(value => <button className={settings.rate === value ? 'active' : ''} onClick={() => onChange('rate', value)} key={value}>{value}×</button>)}</div></div>
@@ -321,31 +307,32 @@ function SettingsModal({ settings, gemini, ttsModel, onChange, onClose }: { sett
   </ModalFrame>;
 }
 
-function ImportModal({ gemini, model, importing, onImport, onTemplate, onClose }: { gemini: boolean; model: string; importing: boolean; onImport: (file: File, enrich: boolean, replace: boolean, bookId: string) => void; onTemplate: () => void; onClose: () => void }) {
-  const [file, setFile] = useState<File | null>(null);
-  const [enrich, setEnrich] = useState(gemini);
-  const [replace, setReplace] = useState(false);
-  const [bookId, setBookId] = useState('');
-  const effectiveBookId = bookId.trim() || (file ? file.name.replace(/\.[^.]+$/, '') : '');
-  const inputRef = useRef<HTMLInputElement>(null);
-  return <ModalFrame title="导入 CSV 词库" subtitle="最少只需 japanese 一列；配置 Gemini 后可自动补全其余字段。" onClose={onClose}>
-    <input ref={inputRef} hidden type="file" accept=".csv,text/csv" onChange={event => setFile(event.target.files?.[0] || null)}/>
-    <button className={`dropzone ${file ? 'has-file' : ''}`} onClick={() => inputRef.current?.click()} onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); setFile(event.dataTransfer.files[0] || null); }}>
-      {file ? <><Check size={30}/><strong>{file.name}</strong><span>{(file.size / 1024).toFixed(1)} KB · 点击重新选择</span></> : <><UploadCloud size={34}/><strong>拖入 CSV，或点击选择</strong><span>支持 UTF-8 与带 BOM 的 CSV</span></>}
-    </button>
-    <div className="setting-group"><label>Firebase 词库名（Books 下的文档 ID）</label><input className="text-input" value={bookId} placeholder={file ? file.name.replace(/\.[^.]+$/, '') : '默认使用 CSV 文件名'} onChange={event => setBookId(event.target.value)}/></div>
-    <div className="csv-columns"><code>japanese</code><code>kana</code><code>romaji</code><code>chinese</code></div>
-    <label className={`check-row ${!gemini ? 'disabled' : ''}`}><input type="checkbox" checked={enrich} disabled={!gemini} onChange={event => setEnrich(event.target.checked)}/><span><b><Sparkles size={16}/> Gemini 自动补全</b><small>{gemini ? `已连接 ${model}` : '未配置 GEMINI_API_KEY，将保留空白字段'}</small></span></label>
-    <label className="check-row"><input type="checkbox" checked={replace} onChange={event => setReplace(event.target.checked)}/><span><b><RotateCcw size={16}/>替换当前词库</b><small>关闭时会追加到现有词库末尾</small></span></label>
-    <div className="modal-actions"><button className="secondary-button" onClick={onTemplate}><Download size={17}/>下载模板</button><button className="primary-button" disabled={!file || !effectiveBookId || importing} onClick={() => file && onImport(file, enrich, replace, effectiveBookId)}>{importing ? '正在处理…' : '导入并上传'}</button></div>
-  </ModalFrame>;
-}
-
-function LibraryModal({ words, onUpdate, onDelete, onReset, onClose }: { words: Vocabulary[]; onUpdate: (id: string, key: keyof Omit<Vocabulary,'id'>, value: string) => void; onDelete: (id: string) => void; onReset: () => void; onClose: () => void }) {
-  return <ModalFrame title={`词库 · ${words.length}`} subtitle="可以直接修正 Gemini 译文或假名；内容会自动保存在浏览器。" onClose={onClose} wide>
-    <div className="library-list">{words.map((word, i) => <div className="library-row" key={word.id}><span className="row-number">{String(i + 1).padStart(2,'0')}</span><input value={word.japanese} aria-label="日文" onChange={e => onUpdate(word.id,'japanese',e.target.value)}/><input value={word.kana} aria-label="假名" placeholder="平假名" onChange={e => onUpdate(word.id,'kana',e.target.value)}/><input value={word.romaji} aria-label="罗马音" placeholder="romaji" onChange={e => onUpdate(word.id,'romaji',e.target.value)}/><input value={word.chinese} aria-label="中文" placeholder="中文释义" onChange={e => onUpdate(word.id,'chinese',e.target.value)}/><button className="delete-button" onClick={() => onDelete(word.id)} aria-label="删除"><Trash2 size={17}/></button></div>)}</div>
-    <div className="library-legend"><span>日文</span><span>假名</span><span>罗马音</span><span>中文释义</span></div>
-    <div className="modal-actions"><button className="secondary-button danger" onClick={onReset}><RotateCcw size={17}/>恢复示例词库</button><button className="primary-button" onClick={onClose}>完成</button></div>
+function BookPickerModal({ current, onPick, onClose }: { current: string; onPick: (book: Book) => Promise<void>; onClose: () => void }) {
+  const [books, setBooks] = useState<Book[] | null>(null);
+  const [error, setError] = useState('');
+  const [loadingId, setLoadingId] = useState('');
+  useEffect(() => {
+    fetch('/api/books').then(async response => {
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || `读取失败 (${response.status})`);
+      setBooks(payload.books);
+    }).catch(err => setError(err instanceof Error ? err.message : '读取单词书失败'));
+  }, []);
+  const pick = async (book: Book) => {
+    setLoadingId(book.id); setError('');
+    try { await onPick(book); } catch (err) { setError(err instanceof Error ? err.message : '加载失败'); setLoadingId(''); }
+  };
+  return <ModalFrame title="选择单词书" onClose={onClose}>
+    <div className="book-list">
+      {!books && !error && <div className="book-status"><Loader2 size={20} className="spin"/>正在读取单词书…</div>}
+      {books && !books.length && <div className="book-status">还没有带单词的单词书，先导入 CSV 吧。</div>}
+      {books?.map(book => <button key={book.id} className={`book-row ${book.id === current ? 'active' : ''}`} disabled={Boolean(loadingId)} onClick={() => pick(book)}>
+        <span className="book-icon"><Library size={20}/></span>
+        <span className="book-info"><strong>{book.title}</strong><small>{book.count} 个单词</small></span>
+        {loadingId === book.id ? <Loader2 size={18} className="spin"/> : book.id === current && <Check size={18}/>}
+      </button>)}
+      {error && <div className="book-status error">{error}</div>}
+    </div>
   </ModalFrame>;
 }
 

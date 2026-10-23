@@ -1,5 +1,5 @@
 // Service Worker：页面离线可打开，听过的词库音频离线可重放。改动缓存策略时请升级 VERSION。
-const VERSION = 'v1';
+const VERSION = 'v2';
 const SHELL = `shell-${VERSION}`;
 const AUDIO = `audio-${VERSION}`;
 

@@ -1,0 +1,73 @@
+name: kotoba-flow
+
+services:
+  api:
+    build:
+      context: .
+      target: api
+    restart: unless-stopped
+    env_file:
+      - .env.local
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8787"
+      FIREBASE_SERVICE_ACCOUNT_PATH: /run/secrets/firebase-service-account.json
+    volumes:
+      - ./secrets/firebase-service-account.json:/run/secrets/firebase-service-account.json:ro
+    expose:
+      - "8787"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8787/api/books/status').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    networks:
+      - backend
+    security_opt:
+      - no-new-privileges:true
+
+  web:
+    build:
+      context: .
+      target: web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/ || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 5s
+    networks:
+      - edge
+      - backend
+    security_opt:
+      - no-new-privileges:true
+
+  cloudflared:
+    image: cloudflare/cloudflared:2026.10.3
+    pull_policy: always
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token-file /run/secrets/cloudflared-token
+    depends_on:
+      web:
+        condition: service_healthy
+    volumes:
+      - ./secrets/cloudflared-token:/run/secrets/cloudflared-token:ro
+    networks:
+      - edge
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  edge:
+  backend:

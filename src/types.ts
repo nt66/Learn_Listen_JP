@@ -9,7 +9,7 @@ export type Vocabulary = {
 };
 
 export type SpeechMode = 'ja' | 'zh';
-export type TtsEngine = 'system' | 'gemini' | 'cloud';
+export type TtsEngine = 'system' | 'cloud';
 
 export type Settings = {
   interval: 1 | 3 | 5;
@@ -17,4 +17,10 @@ export type Settings = {
   mode: SpeechMode;
   shuffle: boolean;
   ttsEngine: TtsEngine;
+};
+
+export type Book = {
+  id: string;
+  title: string;
+  count: number;
 };

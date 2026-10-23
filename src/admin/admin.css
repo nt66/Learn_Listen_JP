@@ -1,0 +1,76 @@
+/* 管理后台：侧边栏 + 顶栏 + 卡片内容区，复用学习页的配色与表单样式 */
+.admin-brand{display:flex;align-items:center;gap:12px;font-size:14px;letter-spacing:.17em}
+.admin-brand b{color:var(--red)}
+
+.admin-login{min-height:100vh;min-height:100dvh;display:grid;place-items:center;padding:20px}
+.login-card{width:min(400px,100%);background:#17181d;border:1px solid #303139;border-radius:22px;padding:32px 28px;box-shadow:0 30px 100px rgba(0,0,0,.45);display:flex;flex-direction:column}
+.login-card h1{font-size:22px;margin:28px 0 6px}
+.admin-field{display:flex;flex-direction:column;gap:8px;margin-top:16px}
+.admin-field span{font-size:12px;color:#92949c}
+.login-submit{margin-top:24px;width:100%}
+.admin-back{display:inline-flex;align-items:center;gap:6px;align-self:center;margin-top:18px;color:var(--muted);font-size:13px;text-decoration:none}
+.admin-back:hover{color:#fff}
+.admin-error{color:var(--red);font-size:13px;margin:10px 0 0}
+
+.admin-shell{min-height:100vh;min-height:100dvh;display:grid;grid-template-columns:232px minmax(0,1fr)}
+.admin-sidebar{background:#0e0f14;border-right:1px solid #202127;padding:22px 16px;display:flex;flex-direction:column;gap:28px;position:sticky;top:0;height:100vh;height:100dvh}
+.admin-sidebar nav{display:flex;flex-direction:column;gap:4px}
+.admin-nav{display:flex;align-items:center;gap:10px;padding:11px 12px;border-radius:10px;color:#9a9ca5;font-size:14px;text-decoration:none}
+.admin-nav:hover{background:#1a1b20;color:#fff}
+.admin-nav.active{background:var(--red-soft);color:#fff}
+.admin-nav.active svg{color:var(--red)}
+
+.admin-main{display:flex;flex-direction:column;min-width:0}
+.admin-topbar{height:64px;padding:0 28px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #202127;background:rgba(9,10,15,.82);backdrop-filter:blur(18px);position:sticky;top:0;z-index:2}
+.admin-crumb{font-size:14px;color:var(--muted)}
+.admin-crumb span{margin:0 6px;color:#4a4b53}
+.admin-crumb b{color:#fff;font-weight:600}
+.admin-user{display:flex;align-items:center;gap:10px;font-size:14px}
+.admin-avatar{width:30px;height:30px;border-radius:50%;background:#2a2b32;display:grid;place-items:center;font-size:13px;font-weight:700;color:var(--red)}
+.admin-icon-button{border:0;background:#1d1e24;width:34px;height:34px;border-radius:9px;display:grid;place-items:center;cursor:pointer;color:#a3a5ad}
+.admin-icon-button:hover{background:#292a32;color:#fff}
+
+.admin-content{padding:28px;display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:22px;align-items:start;max-width:1200px;width:100%}
+.admin-card{background:#141519;border:1px solid #26272d;border-radius:18px;padding:24px}
+.admin-card-head{margin-bottom:20px}
+.admin-card-head.row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.admin-card-head h2{margin:0;font-size:17px}
+.admin-card-head p{margin:6px 0 0;color:#858791;font-size:13px}
+.admin-actions{display:flex;justify-content:flex-end;border-top:1px solid #292a30;padding-top:20px;margin-top:4px}
+.admin-actions .primary-button{min-width:160px}
+.admin-notice{display:flex;align-items:center;gap:8px;padding:11px 14px;border-radius:11px;font-size:13px;margin-bottom:16px}
+.admin-notice.ok{background:rgba(74,222,128,.08);color:#7ee2a2}
+.admin-notice.fail{background:var(--red-soft);color:#ff8a8a}
+
+.admin-table{width:100%;border-collapse:collapse;font-size:14px}
+.admin-table th{text-align:left;font-weight:500;font-size:12px;color:#7d7f89;padding:0 12px 10px;border-bottom:1px solid #292a30}
+.admin-table th:last-child,.admin-table td:last-child{text-align:right}
+.admin-table td{padding:13px 12px;border-bottom:1px solid #202127}
+.admin-table td:first-child{display:flex;align-items:center;gap:9px}
+.admin-table td:first-child svg{color:var(--red);flex-shrink:0}
+.admin-table tr:last-child td{border-bottom:0}
+.admin-table td.admin-empty{display:table-cell;text-align:center;color:var(--muted);padding:26px 0}
+.admin-table td.admin-empty.fail{color:var(--red)}
+
+@media(max-width:960px){.admin-content{grid-template-columns:1fr}}
+@media(max-width:720px){
+  .admin-shell{grid-template-columns:1fr}
+  .admin-sidebar{position:static;height:auto;flex-direction:row;align-items:center;justify-content:space-between;padding:12px 16px;border-right:0;border-bottom:1px solid #202127;gap:12px}
+  .admin-sidebar .admin-brand span:last-child{display:none}
+  .admin-sidebar nav{flex-direction:row}
+  .admin-nav{padding:9px 10px;font-size:13px}
+  .admin-topbar{height:54px;padding:0 16px;top:0}
+  .admin-content{padding:16px}
+  .admin-card{padding:18px}
+}
+
+.audio-progress{border:1px solid #2b2c33;border-radius:12px;padding:13px 14px;margin-bottom:16px;background:#1a1b20}
+.audio-progress-head{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:13px;margin-bottom:10px}
+.audio-progress-head span{display:flex;align-items:center;gap:8px}
+.audio-progress-head span svg{color:var(--red)}
+.audio-progress-head b{font-weight:500;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.audio-progress-track{height:5px;border-radius:5px;background:#2a2b32;overflow:hidden}
+.audio-progress-track span{display:block;height:100%;background:var(--red);transition:width .4s}
+.audio-progress.ok .audio-progress-track span{background:#4ade80}
+.audio-progress.ok .audio-progress-head span svg{color:#4ade80}
+.audio-errors{margin:10px 0 0;padding-left:18px;font-size:12px;color:#ff8a8a;line-height:1.6}
